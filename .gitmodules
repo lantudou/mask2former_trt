@@ -1,0 +1,3 @@
+[submodule "torch2trt"]
+	path = torch2trt
+	url = ./torch2trt
