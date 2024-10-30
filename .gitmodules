@@ -1,3 +1,3 @@
 [submodule "torch2trt"]
 	path = torch2trt
-	url = https://github.com/lantudou/torch2tr
+	url = https://github.com/lantudou/torch2trt
