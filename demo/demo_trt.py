@@ -26,6 +26,8 @@ from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
 from detectron2.projects.deeplab import add_deeplab_config
 from detectron2.utils.logger import setup_logger
+from detectron2.structures import Boxes, ImageList, Instances, BitMasks
+
 
 from mask2former import add_maskformer2_config
 from predictor import VisualizationDemo
@@ -185,10 +187,6 @@ def convert_PositionEmbeddingSine(ctx):
     output_np = output.detach().cpu().numpy()
     output._trt = ctx.network.add_constant(output.shape, np.ascontiguousarray(output_np)).get_output(0)
 
-
-
-
-
 @tensorrt_converter(MSDeformAttnPixelDecoder.y_split)
 def convert_MSDeformAttnPixelDecoder_y_split(ctx):
     # module  = get_arg(ctx, 'self', pos=0, default=None)
@@ -229,6 +227,7 @@ def get_parser():
     parser = argparse.ArgumentParser(description="maskformer2 demo for builtin configs")
     parser.add_argument(
         "--config-file",
+
         #default="../configs/coco/instance-segmentation/maskformer2_R50_bs16_50ep.yaml",
         default="../configs/coco/panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml",
         metavar="FILE",
@@ -259,6 +258,7 @@ def get_parser():
     parser.add_argument(
         "--opts",
         help="Modify config options using the command-line 'KEY VALUE' pairs",
+
         #default=["MODEL.WEIGHTS", "../model_final_3c8ec9.pkl"],  # 添加默认值
         default=["MODEL.WEIGHTS", "../model_final_94dc52.pkl"],  # 添加默认值
         nargs=argparse.REMAINDER,
@@ -282,6 +282,9 @@ class MaskFormer_TRT_model(torch.nn.Module):
         self.instance_on = cfg.MODEL.MASK_FORMER.TEST.INSTANCE_ON,
         self.panoptic_on = cfg.MODEL.MASK_FORMER.TEST.PANOPTIC_ON,
 
+        self.semantic_on = self.semantic_on[0]
+        self.instance_on = self.instance_on[0]
+        self.panoptic_on = self.panoptic_on[0]
         # Ensure that exactly one of them is True
 
         self.device = "cuda"
@@ -290,6 +293,42 @@ class MaskFormer_TRT_model(torch.nn.Module):
 
         self.input_size = input_size
         sem_seg_head.predictor.set_export()
+
+    def postprccess_img(self, model_output, aug_image, saved_name):
+
+        processed_results = []
+        if self.panoptic_on:
+            labels, scores, maskpreds = model_output
+
+            processed_results.append({})
+            prediction = model.panoptic_inference_after_trt(labels, scores, maskpreds)
+            processed_results[-1]["panoptic_seg"] = prediction
+
+        elif self.instance_on:
+            final_scores, pred_classes, pred_masks = model_output
+            result = Instances(self.input_size)
+            result.pred_masks =  pred_masks[0]
+            result.pred_boxes = Boxes(torch.zeros(pred_masks[0].size(0), 4))
+            result.pred_classes = pred_classes[0].int()
+            result.scores = final_scores[0]
+
+            processed_results.append({})
+            processed_results[-1]["instances"] = result
+
+        elif self.semantic_on:
+            semseg = model_output
+            processed_results.append({})
+            processed_results[-1]["sem_seg"] = semseg[0]
+
+        predictions, visualized_output = demo.run_on_prediction(processed_results[0], aug_image)
+
+        if os.path.isdir(args.output):
+            assert os.path.isdir(args.output), args.output
+            out_filename = os.path.join(args.output, os.path.basename(saved_name))
+        else:
+            assert len(args.input) == 1, "Please specify a directory with args.output"
+            out_filename = args.output
+        visualized_output.save(out_filename)
 
     def larger(self, selected_masks, num):
         pred_masks = (selected_masks > num).float()
@@ -385,11 +424,10 @@ class MaskFormer_TRT_model(torch.nn.Module):
         #
         mask_scores = numerator / denominator
         #
-        #
         # # 最终scores [B, topk]
         final_scores = scores_per_image * mask_scores
 
-        return final_scores, pred_classes
+        return final_scores, pred_classes, pred_masks
 
 
     def forward(self, input):
@@ -410,7 +448,7 @@ class MaskFormer_TRT_model(torch.nn.Module):
         if self.panoptic_on:
             outputs = self.panoptic_inference(mask_cls_results, mask_pred_results)
         elif self.instance_on:
-            outputs = self.panoptic_inference(mask_cls_results, mask_pred_results)
+            outputs = self.instance_inference(mask_cls_results, mask_pred_results)
         elif self.semantic_on:
             outputs = self.semantic_inference(mask_cls_results, mask_pred_results)
 
@@ -438,7 +476,6 @@ def convert_panoptic_inference_max_float(ctx):
 
 
     cast_layer = ctx.network.add_cast(shuffle_layer_indices.get_output(0), trt.DataType.FLOAT)
-
 
     output[0]._trt = shuffle_layer_values.get_output(0)
     output[1]._trt = cast_layer.get_output(0)
@@ -553,13 +590,12 @@ def preprocess_img(img, cfg):
     aug_image = aug.get_transform(img).apply_image(img)
 
     image = torch.as_tensor(aug_image.astype("float32").transpose(2, 0, 1))
-    pixel_mean = torch.tensor([[[123.6750]],
-                           [[116.2800]],
-                            [[103.5300]]])
 
-    pixel_std = torch.tensor([[[58.3950]],
-                          [[57.1200]],
-                          [[57.3750]]])
+    pixel_mean = cfg.MODEL.PIXEL_MEAN
+    pixel_mean = torch.tensor(pixel_mean).view(3, 1, 1)
+    pixel_std = cfg.MODEL.PIXEL_STD
+    pixel_std = torch.tensor(pixel_std).view(3, 1, 1)
+
 
 
     image = (image - pixel_mean) / pixel_std
@@ -567,26 +603,7 @@ def preprocess_img(img, cfg):
 
     return images[0],aug_image
 
-def postprccess_img(labels, scores, maskpreds):
-    # upsample masks
-    labels = labels[0]
-    scores = scores[0]
-    maskpreds = maskpreds[0]
 
-    processed_results = []
-    processed_results.append({})
-    prediction = model.panoptic_inference_after_trt(labels, scores, maskpreds)
-    processed_results[-1]["panoptic_seg"] = prediction
-    predictions, visualized_output = demo.run_on_prediction(processed_results[0], aug_image)
-
-
-    if os.path.isdir(args.output):
-        assert os.path.isdir(args.output), args.output
-        out_filename = os.path.join(args.output, os.path.basename("../test/test_dog111.jpg"))
-    else:
-        assert len(args.input) == 1, "Please specify a directory with args.output"
-        out_filename = args.output
-    visualized_output.save(out_filename)
 
 if __name__ == "__main__":
 
@@ -608,7 +625,7 @@ if __name__ == "__main__":
     backbone = model.backbone
     sem_seg_head = model.sem_seg_head
     #print(model.sem_seg_head.predictor.transformer_self_attention_layers[0].self_attn.in_proj_weight.data)
-    test_image = read_image("../test/test_dog.jpg", format="BGR")
+    test_image = read_image(args.input[0], format="BGR")
     image, aug_image= preprocess_img(test_image,cfg)
 
     image = image.unsqueeze(0).cuda()
@@ -623,7 +640,11 @@ if __name__ == "__main__":
     model_trt = torch2trt(trt_model, [x], max_workspace_size=1 << 30)
     out = model_trt(image)
 
-    postprccess_img(out[0], out[1], out[2])
+    trt_model.postprccess_img(out, aug_image, "test_dog_trt_result.jpg")
+    trt_model.postprccess_img(out1, aug_image, "test_dog_result.jpg")
+
+
+
     # error_logits = torch.abs(out["pred_logits"] - out1["pred_logits"])
     # error_masks = torch.abs(out["pred_masks"] - out1["pred_masks"])
     #

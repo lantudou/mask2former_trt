@@ -51,12 +51,14 @@ python demo_trt.py --config-file ../configs/coco/panoptic-segmentation/maskforme
 *  原始图像
 ![示例图片](test/test_dog.jpg)
 * 图片输入大小为427, 640
-*  pytorch测试结果
+* pytorch测试结果
 ![示例图片](test/test_dog_result.jpg)
 * tensorrt测试结果
 ![示例图片](test/test_dog_trt_result.jpg)
 
 ## TO DO
+* 测试Vit backbone
+* 支持semantic-segmentation模型
 * 对batch_size > 1的情况进行完整测试和debug
 * fp16 int8量化
 * 对mask2former_video模型进行转换
