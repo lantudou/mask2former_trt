@@ -42,11 +42,12 @@ def setup_cfg(args):
     return cfg
 
 
+
 def get_parser():
     parser = argparse.ArgumentParser(description="maskformer2 demo for builtin configs")
     parser.add_argument(
         "--config-file",
-        default="configs/coco/panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml",
+        default="../configs/coco/instance-segmentation/maskformer2_R50_bs16_50ep.yaml",
         metavar="FILE",
         help="path to config file",
     )
@@ -55,13 +56,15 @@ def get_parser():
     parser.add_argument(
         "--input",
         nargs="+",
+        default=["../test_dog.jpg"],
         help="A list of space separated input images; "
-        "or a single glob pattern such as 'directory/*.jpg'",
+             "or a single glob pattern such as 'directory/*.jpg'",
     )
     parser.add_argument(
         "--output",
+        default="../test_output",
         help="A file or directory to save output visualizations. "
-        "If not given, will show output in an OpenCV window.",
+             "If not given, will show output in an OpenCV window.",
     )
 
     parser.add_argument(
@@ -73,7 +76,7 @@ def get_parser():
     parser.add_argument(
         "--opts",
         help="Modify config options using the command-line 'KEY VALUE' pairs",
-        default=[],
+        default=["MODEL.WEIGHTS", "../model_final_3c8ec9.pkl"],  # 添加默认值
         nargs=argparse.REMAINDER,
     )
     return parser

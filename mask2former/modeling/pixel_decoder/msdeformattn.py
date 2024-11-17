@@ -85,7 +85,7 @@ class MSDeformAttnTransformerEncoderOnly(nn.Module):
             #mask = torch.as_tensor(mask, dtype=torch.bool, device=src.device)
             #mask = mask.flatten(1)
 
-            print(pos_embed.shape)
+            #print(pos_embed.shape)
             pos_embed = pos_embed.flatten(2).transpose(1, 2)
             lvl_pos_embed = pos_embed + self.level_embed[lvl].view(1, 1, -1)
             #lvl_pos_embed = pos_embed
@@ -412,7 +412,7 @@ class MSDeformAttnPixelDecoder(nn.Module):
         bs = y.shape[0]
         
         y = self.y_split(y,level_start_index)
-        
+
         out = []
         multi_scale_features = []
         num_cur_levels = 0
@@ -453,19 +453,18 @@ class MSDeformAttnPixelDecoder(nn.Module):
 
         
         y, spatial_shapes, level_start_index = self.transformer(srcs, pos)
-        
-        
+
+
         bs = y.shape[0]
-        
+
         y = self.y_split(y,level_start_index)
-        
+
         out = []
         multi_scale_features = []
         num_cur_levels = 0
         for i, z in enumerate(y):
             out.append(z.transpose(1, 2).view(bs, -1, spatial_shapes[i][0], spatial_shapes[i][1]))
 
-        
         # # # append `out` with extra FPN levels
         # # # Reverse feature maps into top-down order (from low to high resolution)
         for idx, f in enumerate(self.in_features[:self.num_fpn_levels][::-1]):
@@ -477,10 +476,12 @@ class MSDeformAttnPixelDecoder(nn.Module):
             y = cur_fpn + F.interpolate(out[-1], size=cur_fpn.shape[-2:], mode="bilinear", align_corners=False)
             y = output_conv(y)
             out.append(y)
-        
+
         for o in out:
             if num_cur_levels < self.maskformer_num_feature_levels:
                 multi_scale_features.append(o)
                 num_cur_levels += 1
 
         return self.mask_features(out[-1]), out[0], multi_scale_features
+
+

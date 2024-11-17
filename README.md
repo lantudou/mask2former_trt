@@ -1,79 +1,62 @@
-# Mask2Former: Masked-attention Mask Transformer for Universal Image Segmentation (CVPR 2022)
+# mask2former_trt: 使用torch2trt库将Mask2former2 官方库模型转换成tensorrt
 
-[Bowen Cheng](https://bowenc0221.github.io/), [Ishan Misra](https://imisra.github.io/), [Alexander G. Schwing](https://alexander-schwing.de/), [Alexander Kirillov](https://alexander-kirillov.github.io/), [Rohit Girdhar](https://rohitgirdhar.github.io/)
+### 主要亮点
+* pytorch模型直接转为原生的通过tensorrt api搭建的模型, 而不是torch_tensorrt，转换后的模型可以完全脱离torch运行
+* 纯python实现 一键转换易上手
+* 一个好的使用torch2trt转换复杂pytorch模型的示例
+* 后续将更新支持更多的功能
 
-[[`arXiv`](https://arxiv.org/abs/2112.01527)] [[`Project`](https://bowenc0221.github.io/mask2former)] [[`BibTeX`](#CitingMask2Former)]
+## 模型转换的难点
+* 在Encoder部分，msdeformattn算子实现为单独的cuda自定义操作形式，这一点使得常规的模型转换方法，例如直接转为onnx或torchscript受到了严重影响。
+* 在Decoder部分，原生torch的nn.multiheadattention()算子的attn_mask参数不支持包括批次的4Dtensor，输入尺寸跟tensorrt中的不一致。
 
-<div align="center">
-  <img src="https://bowenc0221.github.io/images/maskformerv2_teaser.png" width="100%" height="100%"/>
-</div><br/>
+## 优化过程
+* 添加MSDeformableAttnPlugin 作为自定义插件加入到torch2trt中
+* 在pytorch中自己实现了支持批次的attn_mask参数的multiheadattention
+* 修改了模型的一系列的实现方式，新增了N多torch2trt的自定义转换器函数确保转换能够顺利进行
+* 将一些没有分支if的后处理过程融合进了模型中，进一步提升推理速度
 
-### Features
-* A single architecture for panoptic, instance and semantic segmentation.
-* Support major segmentation datasets: ADE20K, Cityscapes, COCO, Mapillary Vistas.
-
-## Updates
-* Add Google Colab demo.
-* Video instance segmentation is now supported! Please check our [tech report](https://arxiv.org/abs/2112.10764) for more details.
-
-## Installation
-
-See [installation instructions](INSTALL.md).
-
-## Getting Started
-
-See [Preparing Datasets for Mask2Former](datasets/README.md).
-
-See [Getting Started with Mask2Former](GETTING_STARTED.md).
-
-Run our demo using Colab: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1uIWE5KbGFSjrxey2aRd5pWkKNY1_SaNq)
-
-Integrated into [Huggingface Spaces 🤗](https://huggingface.co/spaces) using [Gradio](https://github.com/gradio-app/gradio). Try out the Web Demo: [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/akhaliq/Mask2Former)
-
-Replicate web demo and docker image is available here: [![Replicate](https://replicate.com/facebookresearch/mask2former/badge)](https://replicate.com/facebookresearch/mask2former)
-
-## Advanced usage
-
-See [Advanced Usage of Mask2Former](ADVANCED_USAGE.md).
-
-## Model Zoo and Baselines
-
-We provide a large set of baseline results and trained models available for download in the [Mask2Former Model Zoo](MODEL_ZOO.md).
-
-## License
-
-Shield: [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-The majority of Mask2Former is licensed under a [MIT License](LICENSE).
-
-
-However portions of the project are available under separate license terms: Swin-Transformer-Semantic-Segmentation is licensed under the [MIT license](https://github.com/SwinTransformer/Swin-Transformer-Semantic-Segmentation/blob/main/LICENSE), Deformable-DETR is licensed under the [Apache-2.0 License](https://github.com/fundamentalvision/Deformable-DETR/blob/main/LICENSE).
-
-## <a name="CitingMask2Former"></a>Citing Mask2Former
-
-If you use Mask2Former in your research or wish to refer to the baseline results published in the [Model Zoo](MODEL_ZOO.md), please use the following BibTeX entry.
-
-```BibTeX
-@inproceedings{cheng2021mask2former,
-  title={Masked-attention Mask Transformer for Universal Image Segmentation},
-  author={Bowen Cheng and Ishan Misra and Alexander G. Schwing and Alexander Kirillov and Rohit Girdhar},
-  journal={CVPR},
-  year={2022}
-}
+## 注意
+* 该仓库使用测试的tensorrt版本为8.6.1.6
+* 原生mask2former仓库中使用的推理图像大小普遍为800，1200,在显存不够的机器下转换会直接爆显存， 建议修改cfg.INPUT中的MIN_SIZE_TEST和MAX_SIZE_TEST参数来调整模型的输入尺寸。
+* 毫无疑问地，因算子实现方式不同，推理结果与原生torch存在误差，如使用中遇到不可接受的误差，请提出issue让我具体分析。
+* 不要使用该仓库进行模型训练
+* 
+## 使用指南
+1. 跟随mask2former官方库的指导完成原生mask2former的安装
+*  See [installation instructions](INSTALL.md).
+2. 拉取我自己维护的torch2trt库，编译新添加的MSDeformableAttnPlugin
+```bash
+git submoudle init
+git submoudle update
+cd torch2trt
 ```
+然后将torch2trt中的CMakeList.txt中的tensorrt库和头文件的路径改为你自己的路径, 再编译安装torch2trt
 
-If you find the code useful, please also consider the following BibTeX entry.
-
-```BibTeX
-@inproceedings{cheng2021maskformer,
-  title={Per-Pixel Classification is Not All You Need for Semantic Segmentation},
-  author={Bowen Cheng and Alexander G. Schwing and Alexander Kirillov},
-  journal={NeurIPS},
-  year={2021}
-}
+```bash
+python setup.py install
+cmake -B build . && cmake --build build --target install && sudo ldconfig
 ```
+3. 下载权重和测试图片后运行脚本, 像下面这样
+```bash
+cd demo/
+python demo_trt.py --config-file ../configs/coco/panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml \
+  --input input1.jpg \
+  [--other-options]
+  --opts MODEL.WEIGHTS /path/to/checkpoint_file
+```
+## 效果展示
+*  配置文件为panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml 
 
-## Acknowledgement
+*  原始图像
+![示例图片](test/test_dog.jpg)
+* 图片输入大小为427, 640
+*  pytorch测试结果
+![示例图片](test/test_dog_result.jpg)
+* tensorrt测试结果
+![示例图片](test/test_dog_trt_result.jpg)
 
-Code is largely based on MaskFormer (https://github.com/facebookresearch/MaskFormer).
-# mask2former_trt
+## TO DO
+* 对batch_size > 1的情况进行完整测试和debug
+* fp16 int8量化
+* 对mask2former_video模型进行转换
