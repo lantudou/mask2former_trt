@@ -36,11 +36,93 @@ from torch2trt.torch2trt import *
 from mask2former.modeling.transformer_decoder.position_encoding import PositionEmbeddingSine
 from mask2former.modeling.pixel_decoder.msdeformattn import MSDeformAttnPixelDecoder
 from mask2former.modeling.pixel_decoder.ops.modules.ms_deform_attn import MSDeformAttnFunctionModule
-
+from mask2former.modeling.backbone.swin import BasicLayer, SwinTransformerBlock, WindowAttention
 from mask2former.modeling.transformer_decoder.mask2former_transformer_decoder import MultiScaleMaskedTransformerDecoder
 import ctypes
 
-import  logging
+@tensorrt_converter(WindowAttention.boardcast_relative_position)
+def convert_swintransformerblock_paddingzero(ctx):
+    output = ctx.method_return
+    output_np = output.detach().cpu().numpy()
+    output._trt = ctx.network.add_constant(output.shape, np.ascontiguousarray(output_np)).get_output(0)
+
+@tensorrt_converter('torch.nn.functional.pad')
+def convert_pad(ctx):
+    input_tensor = get_arg(ctx, 'x', pos=0, default=None)
+    padding = get_arg(ctx, 'pad', pos=1, default=None)
+    output = ctx.method_return
+
+    # Get input shape
+    N, H, W, C = input_tensor.shape
+
+    # Extract padding values, skipping first two values which specify pad value=0
+
+    pad_s, pad_e, pad_l, pad_r, pad_t, pad_b = padding
+    assert pad_s >= 0 and pad_e >= 0 and pad_l >= 0  and  pad_r >= 0 and pad_t >= 0 and pad_b >= 0
+    # Convert input tensor to TRT tensor
+    input_tensor_trt = add_missing_trt_tensors(ctx.network, [input_tensor])[0]
+    current_tensor = input_tensor_trt
+
+    # Track current height manually
+    current_H = H
+
+    # Handle height padding (pad_t, pad_b)
+    if pad_t > 0:
+        data_top = np.zeros((N, pad_t, W, C), dtype=np.float32)
+        pad_top = ctx.network.add_constant(tuple(data_top.shape), data_top)
+        concat = ctx.network.add_concatenation([pad_top.get_output(0), current_tensor])
+        concat.axis = 1  # Height axis
+        current_tensor = concat.get_output(0)
+        current_H += pad_t  # Update tracked height
+
+    if pad_b > 0:
+        data_bottom = np.zeros((N, pad_b, W, C), dtype=np.float32)
+        pad_bottom = ctx.network.add_constant(tuple(data_bottom.shape), data_bottom)
+        concat = ctx.network.add_concatenation([current_tensor, pad_bottom.get_output(0)])
+        concat.axis = 1  # Height axis
+        current_tensor = concat.get_output(0)
+        current_H += pad_b  # Update tracked height
+
+    current_W = W
+    # Use calculated height for width padding
+    if pad_l > 0:
+        zero_data_left = np.zeros((N, current_H, pad_l, C), dtype=np.float32)
+        pad_left = ctx.network.add_constant(tuple(zero_data_left.shape), zero_data_left)
+        concat = ctx.network.add_concatenation([pad_left.get_output(0), current_tensor])
+        concat.axis = 2  # Width axis
+        current_tensor = concat.get_output(0)
+        current_W += pad_l
+    if pad_r > 0:
+        zero_data_right = np.zeros((N, current_H, pad_r, C), dtype=np.float32)
+        pad_right = ctx.network.add_constant(tuple(zero_data_right.shape), zero_data_right)
+        concat = ctx.network.add_concatenation([current_tensor, pad_right.get_output(0)])
+        concat.axis = 2  # Width axis
+        current_tensor = concat.get_output(0)
+        current_W += pad_r
+
+    if pad_s > 0:
+        zero_data_left = np.zeros((N, current_H, current_W, pad_s), dtype=np.float32)
+        pad_start = ctx.network.add_constant(tuple(zero_data_left.shape), zero_data_left)
+        concat = ctx.network.add_concatenation([pad_start.get_output(0), current_tensor])
+        concat.axis = 3  # Width axis
+        current_tensor = concat.get_output(0)
+
+    if pad_e > 0:
+        zero_data_right = np.zeros((N, current_H, current_W, pad_e), dtype=np.float32)
+        pad_end = ctx.network.add_constant(tuple(zero_data_right.shape), zero_data_right)
+        concat = ctx.network.add_concatenation([current_tensor, pad_end.get_output(0)])
+        concat.axis = 3  # Width axis
+        current_tensor = concat.get_output(0)
+
+    output._trt = current_tensor
+
+
+@tensorrt_converter(BasicLayer.generate_attn_mask)
+def convert_swin_layer_generate_attn_mask(ctx):
+    output = ctx.method_return
+
+    output_np = output.detach().cpu().numpy()
+    output._trt = ctx.network.add_constant(output.shape, np.ascontiguousarray(output_np)).get_output(0)
 
 
 @tensorrt_converter(MultiScaleMaskedTransformerDecoder.convert_attn_mask_float_value)
@@ -230,6 +312,7 @@ def get_parser():
 
         #default="../configs/coco/instance-segmentation/maskformer2_R50_bs16_50ep.yaml",
         default="../configs/coco/panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml",
+        #default="../configs/coco/panoptic-segmentation/swin/maskformer2_swin_tiny_bs16_50ep.yaml",
         metavar="FILE",
         help="path to config file",
     )
@@ -261,11 +344,10 @@ def get_parser():
 
         #default=["MODEL.WEIGHTS", "../model_final_3c8ec9.pkl"],  # 添加默认值
         default=["MODEL.WEIGHTS", "../model_final_94dc52.pkl"],  # 添加默认值
+        #default=["MODEL.WEIGHTS", "../model_final_9fd0ae.pkl"],
         nargs=argparse.REMAINDER,
     )
     return parser
-
-
 
 
 
@@ -274,6 +356,8 @@ class MaskFormer_TRT_model(torch.nn.Module):
         super().__init__()
         self.sem_seg_head = sem_seg_head
         self.backbone = backbone
+        if cfg.MODEL.BACKBONE.NAME == 'D2SwinTransformer':
+            self.backbone.set_export()
 
         self.num_queries = cfg.MODEL.MASK_FORMER.NUM_OBJECT_QUERIES
         self.test_topk_per_image = cfg.TEST.DETECTIONS_PER_IMAGE
@@ -432,7 +516,6 @@ class MaskFormer_TRT_model(torch.nn.Module):
 
     def forward(self, input):
         features = self.backbone(input)
-
         outputs = self.sem_seg_head(features)
         mask_cls_results = outputs["pred_logits"]
         mask_pred_results = outputs["pred_masks"]
@@ -637,35 +720,11 @@ if __name__ == "__main__":
 
     out1 = trt_model(image)
 
-    model_trt = torch2trt(trt_model, [x], max_workspace_size=1 << 30)
+    model_trt = torch2trt(trt_model, [x], max_workspace_size=1 << 31)
     out = model_trt(image)
+
 
     trt_model.postprccess_img(out, aug_image, "test_dog_trt_result.jpg")
     trt_model.postprccess_img(out1, aug_image, "test_dog_result.jpg")
 
-
-
-    # error_logits = torch.abs(out["pred_logits"] - out1["pred_logits"])
-    # error_masks = torch.abs(out["pred_masks"] - out1["pred_masks"])
-    #
-    # print("绝对误差最大值:")
-    # print(f"logits: {torch.max(error_logits)}")
-    # print(f"masks: {torch.max(error_masks)}")
-
-
-
-    #print((torch.max(torch.abs(out[2] - out1[2]))))
-    #
-    #
-    # print((torch.max(torch.abs(out['res2'] - out1['res2'])) ))
-    # print((torch.max(torch.abs(out['res3'] - out1['res3']))))
-    # print((torch.max(torch.abs(out['res4'] - out1['res4'])) ))
-    # print((torch.max(torch.abs(out['res5'] - out1['res5']))))
-    # mask_cls_results, mask_pred_results = trt_model(image)
-    #
-    # postprccess_img(mask_cls_results, mask_pred_results)
-    #
-    #
-    # model_trt = torch2trt(trt_model, [x], max_workspace_size=1 << 30)
-    # out = model_trt(image)
 

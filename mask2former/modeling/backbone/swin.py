@@ -41,33 +41,49 @@ class Mlp(nn.Module):
         return x
 
 
+# def window_partition(x, window_size):
+#     """
+#     Args:
+#         x: (B, H, W, C)
+#         window_size (int): window size
+#     Returns:
+#         windows: (num_windows*B, window_size, window_size, C)
+#     """
+#     B, H, W, C = x.shape
+#     x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
+#     windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
+#     return windows
+
 def window_partition(x, window_size):
-    """
-    Args:
-        x: (B, H, W, C)
-        window_size (int): window size
-    Returns:
-        windows: (num_windows*B, window_size, window_size, C)
-    """
     B, H, W, C = x.shape
     x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
-    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
+    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous()  # (B, H//ws, W//ws, ws, ws, C)
+    windows = windows.view(B, (H // window_size) * (W // window_size), window_size*window_size, C)
     return windows
 
 
+# def window_reverse(windows, window_size, H, W):
+#     """
+#     Args:
+#         windows: (num_windows*B, window_size, window_size, C)
+#         window_size (int): Window size
+#         H (int): Height of image
+#         W (int): Width of image
+#     Returns:
+#         x: (B, H, W, C)
+#     """
+#     B = int(windows.shape[0] / (H * W / window_size / window_size))
+#     x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
+#     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
+#     return x
+
 def window_reverse(windows, window_size, H, W):
-    """
-    Args:
-        windows: (num_windows*B, window_size, window_size, C)
-        window_size (int): Window size
-        H (int): Height of image
-        W (int): Width of image
-    Returns:
-        x: (B, H, W, C)
-    """
-    B = int(windows.shape[0] / (H * W / window_size / window_size))
-    x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
+    B, num_windows, ws, ws, C = windows.shape
+    nh = H // window_size
+    nw = W // window_size
+    x = windows.view(B, nh, nw, ws, ws, C)
+    x = x.permute(0, 1, 3, 2, 4, 5)
+    x = x.contiguous().view(B, H, W, C)
     return x
 
 
@@ -101,6 +117,9 @@ class WindowAttention(nn.Module):
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim ** -0.5
+        self.export = False
+        self.qkv_bias = qkv_bias
+
 
         # define a parameter table of relative position bias
         self.relative_position_bias_table = nn.Parameter(
@@ -125,51 +144,118 @@ class WindowAttention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
+        self.q = nn.Linear(dim, dim, bias=qkv_bias)
+        self.k = nn.Linear(dim, dim, bias=qkv_bias)
+        self.v = nn.Linear(dim, dim, bias=qkv_bias)
+
         trunc_normal_(self.relative_position_bias_table, std=0.02)
         self.softmax = nn.Softmax(dim=-1)
+    def set_export(self):
+        self.export = True
+        dim = self.dim
+        self.q.weight.data = self.qkv.weight[:dim, :].detach()
+        self.k.weight.data = self.qkv.weight[dim:2 * dim, :].detach()
+        self.v.weight.data = self.qkv.weight[2 * dim:3 * dim, :].detach()
+
+        if self.qkv_bias:
+            self.q.bias.data = self.qkv.bias[:dim].detach()
+            self.k.bias.data = self.qkv.bias[dim:2 * dim].detach()
+            self.v.bias.data = self.qkv.bias[2 * dim:3 * dim].detach()
+
+    # def forward(self, x, mask=None):
+    #     """Forward function.
+    #     Args:
+    #         x: input features with shape of (num_windows*B, N, C)
+    #         mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
+    #     """
+    #     B_, N, C = x.shape
+    #     # Apply the qkv linear transformation to the input x
+    #     qkv = self.qkv(x)
+    #
+    #     # Reshape the result to have the shape (B_, N, 3, self.num_heads, C // self.num_heads)
+    #     qkv = qkv.reshape(B_, N, 3, self.num_heads, C // self.num_heads)
+    #
+    #     # Permute the dimensions to the desired order (2, 0, 3, 1, 4)
+    #     qkv = qkv.permute(2, 0, 3, 1, 4)
+    #
+    #     # Extract the query, key, and value tensors from the permuted qkv tensor
+    #     q = qkv[0]
+    #     k = qkv[1]
+    #     v = qkv[2]
+    #
+    #     q = q * self.scale
+    #     attn = q @ k.transpose(-2, -1)
+    #
+    #     relative_position_bias = self.relative_position_bias_table[
+    #         self.relative_position_index.view(-1)
+    #     ].view(
+    #         self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1
+    #     )  # Wh*Ww,Wh*Ww,nH
+    #     relative_position_bias = relative_position_bias.permute(
+    #         2, 0, 1
+    #     ).contiguous()  # nH, Wh*Ww, Wh*Ww
+    #     attn = attn + relative_position_bias.unsqueeze(0)
+    #
+    #     if mask is not None:
+    #         nW = mask.shape[0]
+    #         attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
+    #         attn = attn.view(-1, self.num_heads, N, N)
+    #         attn = self.softmax(attn)
+    #     else:
+    #         attn = self.softmax(attn)
+    #
+    #     attn = self.attn_drop(attn)
+    #
+    #     x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+    #     x = self.proj(x)
+    #     x = self.proj_drop(x)
+    #     return x
+    def boardcast_relative_position(self, attn):
+        B, nw, num_heads, _, _ = attn.shape
+        relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)
+        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # shape (num_heads, N, N)
+
+        relative_position_bias = relative_position_bias.repeat(B, nw, 1, 1, 1)
+
+        return  relative_position_bias
 
     def forward(self, x, mask=None):
-        """Forward function.
-        Args:
-            x: input features with shape of (num_windows*B, N, C)
-            mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
-        """
-        B_, N, C = x.shape
-        qkv = (
-            self.qkv(x)
-            .reshape(B_, N, 3, self.num_heads, C // self.num_heads)
-            .permute(2, 0, 3, 1, 4)
-        )
-        q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
+        B, nw, N, C = x.shape
 
+        q = self.q(x)
+        k = self.k(x)
+        v = self.v(x)
+
+        q = q.reshape(B, nw, N, self.num_heads, C // self.num_heads)
+        k = k.reshape(B, nw, N, self.num_heads, C // self.num_heads)
+        v = v.reshape(B, nw, N, self.num_heads, C // self.num_heads)
+
+        q = q.permute(0, 1, 3, 2, 4)
+        k = k.permute(0, 1, 3, 2, 4)
+        v = v.permute(0, 1, 3, 2, 4)
+
+        # qkv = self.qkv(x)
+        # qkv = qkv.reshape(B, nw, N, 3, self.num_heads, C // self.num_heads)
+        # qkv = qkv.permute(3, 0, 1, 4, 2, 5)  # shape (3, B, nw, num_heads, N, C//num_heads)
+        #
+        #
+        # q, k, v = qkv[0], qkv[1], qkv[2]
         q = q * self.scale
-        attn = q @ k.transpose(-2, -1)
+        attn = q @ k.transpose(-2, -1)  # shape (B, nw, num_heads, N, N)
 
-        relative_position_bias = self.relative_position_bias_table[
-            self.relative_position_index.view(-1)
-        ].view(
-            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1
-        )  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(
-            2, 0, 1
-        ).contiguous()  # nH, Wh*Ww, Wh*Ww
-        attn = attn + relative_position_bias.unsqueeze(0)
+        attn = attn + self.boardcast_relative_position(attn)
 
         if mask is not None:
-            nW = mask.shape[0]
-            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
-            attn = attn.view(-1, self.num_heads, N, N)
-            attn = self.softmax(attn)
-        else:
-            attn = self.softmax(attn)
-
+            nW = mask.shape[1]
+            assert nw == nW, "Number of windows mismatch"
+            attn = attn + mask
+        attn = self.softmax(attn)
         attn = self.attn_drop(attn)
-
-        x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+        x = (attn @ v).transpose(2, 3).reshape(B, nw, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
-
 
 class SwinTransformerBlock(nn.Module):
     """Swin Transformer Block.
@@ -232,6 +318,8 @@ class SwinTransformerBlock(nn.Module):
         self.H = None
         self.W = None
 
+
+
     def forward(self, x, mask_matrix):
         """Forward function.
         Args:
@@ -249,9 +337,10 @@ class SwinTransformerBlock(nn.Module):
 
         # pad feature maps to multiples of window size
         pad_l = pad_t = 0
-        pad_r = (self.window_size - W % self.window_size) % self.window_size
-        pad_b = (self.window_size - H % self.window_size) % self.window_size
+        pad_r = (self.window_size - self.W % self.window_size) % self.window_size
+        pad_b = (self.window_size - self.H % self.window_size) % self.window_size
         x = F.pad(x, (0, 0, pad_l, pad_r, pad_t, pad_b))
+
         _, Hp, Wp, _ = x.shape
 
         # cyclic shift
@@ -265,16 +354,14 @@ class SwinTransformerBlock(nn.Module):
         # partition windows
         x_windows = window_partition(
             shifted_x, self.window_size
-        )  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(
-            -1, self.window_size * self.window_size, C
-        )  # nW*B, window_size*window_size, C
+        )  # nW*B, window_size* window_size, C
+
 
         # W-MSA/SW-MSA
         attn_windows = self.attn(x_windows, mask=attn_mask)  # nW*B, window_size*window_size, C
 
         # merge windows
-        attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
+        attn_windows = attn_windows.view(B, -1, self.window_size, self.window_size, C)
         shifted_x = window_reverse(attn_windows, self.window_size, Hp, Wp)  # B H' W' C
 
         # reverse cyclic shift
@@ -283,8 +370,8 @@ class SwinTransformerBlock(nn.Module):
         else:
             x = shifted_x
 
-        if pad_r > 0 or pad_b > 0:
-            x = x[:, :H, :W, :].contiguous()
+        #if pad_r > 0 or pad_b > 0:
+        x = x[:, :H, :W, :].contiguous()
 
         x = x.view(B, H * W, C)
 
@@ -376,7 +463,7 @@ class BasicLayer(nn.Module):
         self.shift_size = window_size // 2
         self.depth = depth
         self.use_checkpoint = use_checkpoint
-
+        self.num_heads = num_heads
         # build blocks
         self.blocks = nn.ModuleList(
             [
@@ -402,6 +489,20 @@ class BasicLayer(nn.Module):
             self.downsample = downsample(dim=dim, norm_layer=norm_layer)
         else:
             self.downsample = None
+
+
+    def generate_attn_mask(self, img_mask, batch_size):
+        mask_windows = window_partition(
+            img_mask, self.window_size
+        )  # nW, window_size, window_size, 1
+        mask_windows = mask_windows.view(batch_size, -1, self.window_size * self.window_size)
+        attn_mask = mask_windows.unsqueeze(2) - mask_windows.unsqueeze(3)
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
+            attn_mask == 0, float(0.0)
+        )
+        attn_mask = attn_mask.unsqueeze(2).repeat(1, 1, self.num_heads, 1, 1)
+        return attn_mask
+
 
     def forward(self, x, H, W):
         """Forward function.
@@ -429,15 +530,9 @@ class BasicLayer(nn.Module):
             for w in w_slices:
                 img_mask[:, h, w, :] = cnt
                 cnt += 1
+        B = x.shape[0]
 
-        mask_windows = window_partition(
-            img_mask, self.window_size
-        )  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
-            attn_mask == 0, float(0.0)
-        )
+        attn_mask = self.generate_attn_mask(img_mask, B)
 
         for blk in self.blocks:
             blk.H, blk.W = H, W
@@ -481,9 +576,9 @@ class PatchEmbed(nn.Module):
         # padding
         _, _, H, W = x.size()
         if W % self.patch_size[1] != 0:
-            x = F.pad(x, (0, self.patch_size[1] - W % self.patch_size[1]))
+            x = F.pad(x, (0, self.patch_size[1] - W % self.patch_size[1], 0, 0, 0, 0))
         if H % self.patch_size[0] != 0:
-            x = F.pad(x, (0, 0, 0, self.patch_size[0] - H % self.patch_size[0]))
+            x = F.pad(x, (0, 0, 0, self.patch_size[0] - H % self.patch_size[0], 0, 0))
 
         x = self.proj(x)  # B C Wh Ww
         if self.norm is not None:
@@ -555,6 +650,7 @@ class SwinTransformer(nn.Module):
         self.out_indices = out_indices
         self.frozen_stages = frozen_stages
 
+        self.export = False
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
             patch_size=patch_size,
@@ -676,6 +772,14 @@ class SwinTransformer(nn.Module):
                 outs["res{}".format(i + 2)] = out
 
         return outs
+    def set_export(self):
+        self.export = True
+        for layer in self.layers:
+            for block in layer.blocks:
+                attn = block.attn
+                attn.set_export()
+
+
 
     def train(self, mode=True):
         """Convert the model into training mode while keep layers freezed."""

@@ -1,43 +1,43 @@
-# mask2former_trt: 使用torch2trt库将Mask2former2 官方库模型转换成tensorrt
+# mask2former_trt: Use the torch2trt library to convert the official Mask2former model to TensorRT
+![中文README](README_CN.md)
+### Key Highlights
+* The PyTorch model is directly converted to a native model built using the TensorRT API, rather than using torch_tensorrt. The converted model can run completely independently of PyTorch.
+* Pure Python implementation for easy one-click conversion.
+* A good example of using torch2trt to convert complex PyTorch models.
+* Future updates will support more features.
 
-### 主要亮点
-* pytorch模型直接转为原生的通过tensorrt api搭建的模型, 而不是torch_tensorrt，转换后的模型可以完全脱离torch运行
-* 纯python实现 一键转换易上手
-* 一个好的使用torch2trt转换复杂pytorch模型的示例
-* 后续将更新支持更多的功能
+## Challenges in Model Conversion
+* In the Encoder section, the msdeformattn operator is implemented as a separate custom CUDA operation, which severely impacts conventional model conversion methods, such as direct conversion to ONNX or TorchScript.
+* In the Decoder section, the attn_mask parameter of the native PyTorch nn.multiheadattention() operator does not support 4D tensors that include batches, leading to inconsistencies in input sizes compared to TensorRT.
 
-## 模型转换的难点
-* 在Encoder部分，msdeformattn算子实现为单独的cuda自定义操作形式，这一点使得常规的模型转换方法，例如直接转为onnx或torchscript受到了严重影响。
-* 在Decoder部分，原生torch的nn.multiheadattention()算子的attn_mask参数不支持包括批次的4Dtensor，输入尺寸跟tensorrt中的不一致。
+## Optimization Process
+* Added MSDeformableAttnPlugin as a custom plugin to torch2trt.
+* Implemented a multiheadattention in PyTorch that supports batch attn_mask parameters.
+* Modified a series of implementations in the model and added numerous custom converter functions for torch2trt to ensure smooth conversion.
+* Integrated some post-processing steps without branching if statements into the model to further enhance inference speed.
 
-## 优化过程
-* 添加MSDeformableAttnPlugin 作为自定义插件加入到torch2trt中
-* 在pytorch中自己实现了支持批次的attn_mask参数的multiheadattention
-* 修改了模型的一系列的实现方式，新增了N多torch2trt的自定义转换器函数确保转换能够顺利进行
-* 将一些没有分支if的后处理过程融合进了模型中，进一步提升推理速度
+## Notes
+* The tested version of TensorRT used in this repository is 8.6.1.6.
+* The inference image sizes commonly used in the original Mask2former repository are 800 and 1200. On machines with insufficient memory, conversion may lead to out-of-memory errors. It is recommended to adjust the MIN_SIZE_TEST and MAX_SIZE_TEST parameters in cfg.INPUT to modify the model's input size.
+* Due to differences in operator implementation, there may be discrepancies in inference results compared to native PyTorch. If you encounter unacceptable discrepancies during use, please raise an issue for specific analysis.
+* Do not use this repository for model training.
 
-## 注意
-* 该仓库使用测试的tensorrt版本为8.6.1.6
-* 原生mask2former仓库中使用的推理图像大小普遍为800，1200,在显存不够的机器下转换会直接爆显存， 建议修改cfg.INPUT中的MIN_SIZE_TEST和MAX_SIZE_TEST参数来调整模型的输入尺寸。
-* 毫无疑问地，因算子实现方式不同，推理结果与原生torch存在误差，如使用中遇到不可接受的误差，请提出issue让我具体分析。
-* 不要使用该仓库进行模型训练
-* 
-## 使用指南
-1. 跟随mask2former官方库的指导完成原生mask2former的安装
+## Usage Guide
+1. Follow the official Mask2former library instructions to complete the installation of the native Mask2former.
 *  See [installation instructions](INSTALL.md).
-2. 拉取我自己维护的torch2trt库，编译新添加的MSDeformableAttnPlugin
+2. Clone my maintained torch2trt library and compile the newly added MSDeformableAttnPlugin.
 ```bash
 git submoudle init
 git submoudle update
 cd torch2trt
 ```
-然后将torch2trt中的CMakeList.txt中的tensorrt库和头文件的路径改为你自己的路径, 再编译安装torch2trt
-
+Then change the paths of the TensorRT library and header files in the CMakeLists.txt of torch2trt to your own paths, and then compile and install torch2trt.
 ```bash
 python setup.py install
 cmake -B build . && cmake --build build --target install && sudo ldconfig
 ```
-3. 下载权重和测试图片后运行脚本, 像下面这样
+
+3. Download the weights and test images, then run the script as shown below.
 ```bash
 cd demo/
 python demo_trt.py --config-file ../configs/coco/panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml \
@@ -45,20 +45,20 @@ python demo_trt.py --config-file ../configs/coco/panoptic-segmentation/maskforme
   [--other-options]
   --opts MODEL.WEIGHTS /path/to/checkpoint_file
 ```
-## 效果展示
-*  配置文件为panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml 
+## Results Showcase
+*  The configuration file is panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml 
 
-*  原始图像
-![示例图片](test/test_dog.jpg)
-* 图片输入大小为427, 640
-* pytorch测试结果
-![示例图片](test/test_dog_result.jpg)
-* tensorrt测试结果
-![示例图片](test/test_dog_trt_result.jpg)
+*  Original Image
+![Example Image](test/test_dog.jpg)
+* Input image size is 427, 640
+* PyTorch test results
+![Example Image](test/test_dog_result.jpg)
+* TensorRT test results
+![Example Image](test/test_dog_trt_result.jpg)
 
 ## TO DO
-* 测试Vit backbone
-* 支持semantic-segmentation模型
-* 对batch_size > 1的情况进行完整测试和debug
-* fp16 int8量化
-* 对mask2former_video模型进行转换
+* ~~Support Swin backbone~~  Completed
+* Support semantic-segmentation models
+* Complete testing and debugging for batch_size > 1
+* fp16 int8 quantization
+* Convert the mask2former_video model
