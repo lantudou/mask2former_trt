@@ -57,9 +57,10 @@ python demo_trt.py --config-file ../configs/coco/panoptic-segmentation/maskforme
 ![示例图片](test/test_dog_trt_result.jpg)
 
 * 推理速度: On RTX3050  1 batch size
-| Pytorch | Tensorrt fp32 | 
-|:-------|:--------:|
-| 12.25FPS   | 20.36FPS    |
+
+| Pytorch2.5 | Tensorrt fp32 | 
+|:----------:|:-------------:|
+| 12.25FPS |   20.36FPS    |
 
 ## TO DO
 * ~~测试Swin backbone~~ 完成

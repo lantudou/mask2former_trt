@@ -57,9 +57,11 @@ python demo_trt.py --config-file ../configs/coco/panoptic-segmentation/maskforme
 ![Example Image](test/test_dog_trt_result.jpg)
 
 * Interference Speed: On RTX3050  1 batch size
-| Pytorch | Tensorrt fp32 | 
-|:-------|:--------:|
-| 12.25FPS   | 20.36FPS    |
+
+| Pytorch2.5 | Tensorrt fp32 | 
+|:----------:|:-------------:|
+| 12.25FPS |   20.36FPS    |
+
 
 ## TO DO
 * ~~Support Swin backbone~~  Completed
