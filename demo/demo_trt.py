@@ -40,6 +40,8 @@ from mask2former.modeling.backbone.swin import BasicLayer, SwinTransformerBlock,
 from mask2former.modeling.transformer_decoder.mask2former_transformer_decoder import MultiScaleMaskedTransformerDecoder
 import ctypes
 
+from tqdm import tqdm
+
 @tensorrt_converter(WindowAttention.boardcast_relative_position)
 def convert_swintransformerblock_paddingzero(ctx):
     output = ctx.method_return
@@ -727,4 +729,23 @@ if __name__ == "__main__":
     trt_model.postprccess_img(out, aug_image, "test_dog_trt_result.jpg")
     trt_model.postprccess_img(out1, aug_image, "test_dog_result.jpg")
 
+    import time
 
+    output = trt_model(image)
+    torch.cuda.current_stream().synchronize()
+    t0 = time.time()
+    for i in tqdm(range(100)):
+        output = trt_model(image)
+    torch.cuda.current_stream().synchronize()
+    t1 = time.time()
+
+    print('FPS Pytorch: ' +str( 100.0 / (t1 - t0)))
+    output = model_trt(image)
+    torch.cuda.current_stream().synchronize()
+    t0 = time.time()
+    for i in tqdm(range(100)):
+        output = model_trt(image)
+    torch.cuda.current_stream().synchronize()
+    t1 = time.time()
+
+    print('FPS TensorRT: ' +str( 100.0 / (t1 - t0)))

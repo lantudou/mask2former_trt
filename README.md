@@ -2,7 +2,7 @@
 ![中文README](README_CN.md)
 ### Key Highlights
 * The PyTorch model is directly converted to a native model built using the TensorRT API, rather than using torch_tensorrt. The converted model can run completely independently of PyTorch.
-* Pure Python implementation for easy one-click conversion.
+* Pure Python implementation, seamlessly integrated with the original repository, easy to use with one-click conversion and personalized model configuration files.
 * A good example of using torch2trt to convert complex PyTorch models.
 * Future updates will support more features.
 
@@ -55,6 +55,12 @@ python demo_trt.py --config-file ../configs/coco/panoptic-segmentation/maskforme
 ![Example Image](test/test_dog_result.jpg)
 * TensorRT test results
 ![Example Image](test/test_dog_trt_result.jpg)
+
+* Interference Speed: On RTX3050  1 batch size
+| Pytorch | Tensorrt fp32 | 
+|:-------|:--------:|
+| 12.25FPS   | 20.36FPS    |
+
 
 ## TO DO
 * ~~Support Swin backbone~~  Completed

@@ -2,7 +2,7 @@
 
 ### 主要亮点
 * pytorch模型直接转为原生的通过tensorrt api搭建的模型, 而不是torch_tensorrt，转换后的模型可以完全脱离torch运行
-* 纯python实现 一键转换易上手
+* 纯python实现，与原始仓库无缝对接 搭配自己的模型配置文件一键转换易上手
 * 一个好的使用torch2trt转换复杂pytorch模型的示例
 * 后续将更新支持更多的功能
 
@@ -55,6 +55,11 @@ python demo_trt.py --config-file ../configs/coco/panoptic-segmentation/maskforme
 ![示例图片](test/test_dog_result.jpg)
 * tensorrt测试结果
 ![示例图片](test/test_dog_trt_result.jpg)
+
+* 推理速度: On RTX3050  1 batch size
+| Pytorch | Tensorrt fp32 | 
+|:-------|:--------:|
+| 12.25FPS   | 20.36FPS  |
 
 ## TO DO
 * ~~测试Swin backbone~~ 完成
