@@ -61,7 +61,6 @@ python demo_trt.py --config-file ../configs/coco/panoptic-segmentation/maskforme
 |:-------|:--------:|
 | 12.25FPS   | 20.36FPS    |
 
-
 ## TO DO
 * ~~Support Swin backbone~~  Completed
 * Support semantic-segmentation models
